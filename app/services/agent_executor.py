@@ -18,7 +18,9 @@ if sys.stderr.encoding != 'utf-8':
     sys.stderr.reconfigure(encoding='utf-8')
 
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import HumanMessage
 from patchright.async_api import async_playwright
+import base64
 
 from app.models.run import LogEntry
 from app.core.exceptions import InvalidAPIKeyError, ExecutionError, TimeoutError
@@ -125,6 +127,14 @@ class AgentExecutor:
             
             page = await context.new_page()
             
+            # 设置弹窗自动处理
+            async def handle_dialog(dialog):
+                logger.info(f"检测到弹窗: {dialog.message}")
+                self.logs.append(log_step(step=len(self.logs) + 1, action="处理弹窗", description=f"自动关闭弹窗: {dialog.message[:50]}"))
+                await dialog.dismiss()
+            
+            page.on("dialog", handle_dialog)
+            
             result_data = {}
             
             try:
@@ -184,76 +194,160 @@ class AgentExecutor:
         page_title = await page.title()
         elements = await self._get_interactive_elements(page)
         
-        # 检查是否需要手动登录（非 headless 且首次访问某些网站）
-        if not self.headless and allow_manual_login and page_url != "about:blank":
+        # 检查并处理页面弹窗/遮罩层（通过视觉识别）
+        try:
+            # 先检查是否有明显的弹窗元素
+            has_popup = await page.evaluate("""
+                () => {
+                    // 检查常见的弹窗特征
+                    const modals = document.querySelectorAll('[class*="modal"], [class*="popup"], [class*="dialog"], [class*="overlay"], [class*="toast"], [class*="notice"]');
+                    for (const m of modals) {
+                        const rect = m.getBoundingClientRect();
+                        const style = window.getComputedStyle(m);
+                        if (rect.width > 0 && rect.height > 0 && 
+                            style.display !== 'none' && style.visibility !== 'hidden' &&
+                            style.zIndex > 100) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+            
+            if has_popup:
+                logger.info("检测到弹窗，尝试关闭...")
+                # 尝试多种方式关闭弹窗
+                closed = False
+                
+                # 1. 尝试点击关闭按钮（X 图标）
+                close_selectors = [
+                    "[class*='close']:visible",
+                    "[class*='Close']:visible", 
+                    "[aria-label*='关闭']:visible",
+                    "[aria-label*='close']:visible",
+                    "[title*='关闭']:visible",
+                    "[title*='close']:visible",
+                    "button[class*='close']:visible",
+                    "span[class*='close']:visible",
+                    "i[class*='close']:visible",
+                    ".modal-close:visible",
+                    ".dialog-close:visible",
+                    ".popup-close:visible",
+                ]
+                
+                for selector in close_selectors:
+                    try:
+                        close_btn = page.locator(selector).first
+                        if await close_btn.is_visible(timeout=500):
+                            await close_btn.click(timeout=1000)
+                            logger.info(f"点击关闭按钮: {selector}")
+                            self.logs.append(log_step(step=len(self.logs) + 1, action="关闭弹窗", description=f"点击关闭按钮"))
+                            closed = True
+                            await asyncio.sleep(0.5)
+                            break
+                    except:
+                        continue
+                
+                # 2. 如果没找到关闭按钮，尝试按 ESC
+                if not closed:
+                    await page.keyboard.press("Escape")
+                    logger.info("按 ESC 尝试关闭弹窗")
+                    await asyncio.sleep(0.5)
+                    
+        except Exception as e:
+            logger.warning(f"弹窗处理失败: {str(e)}")
+        
+        # 检查是否需要手动登录（非 headless 模式下）
+        if not self.headless and allow_manual_login:
             # 检查是否有验证码或登录页面特征
-            page_text = await page.evaluate("() => document.body.innerText")
-            if any(keyword in page_text for keyword in ["验证码", "登录", "请输入验证码", "人机验证"]):
-                self.logs.append(log_step(step=len(self.logs) + 1, action="等待登录", description="检测到登录/验证码页面，请在浏览器中手动处理..."))
-                logger.info("detected_login_page")
-                # 等待用户处理
-                await asyncio.sleep(self.manual_login_timeout)
+            try:
+                page_text = await page.evaluate("() => document.body.innerText") if page_url != "about:blank" else ""
+                if any(keyword in page_text for keyword in ["验证码", "请完成安全验证", "人机验证", "滑动验证", "安全校验"]):
+                    self.logs.append(log_step(step=len(self.logs) + 1, action="等待登录", description="检测到验证码，请在浏览器中手动处理（60秒）..."))
+                    logger.info("detected_captcha")
+                    # 等待用户处理
+                    await asyncio.sleep(self.manual_login_timeout)
+                    # 重新检查是否还有验证码
+                    page_text = await page.evaluate("() => document.body.innerText")
+                    if any(keyword in page_text for keyword in ["验证码", "请完成安全验证", "人机验证"]):
+                        self.logs.append(log_step(step=len(self.logs) + 1, action="警告", description="验证码可能未处理完成，继续执行..."))
+            except Exception as e:
+                logger.warning(f"检查验证码失败: {str(e)}")
         
         page_snippet = await page.evaluate("() => document.body.innerText.substring(0, 500)")
         
+        # 截取页面截图（空白页不截图）
+        screenshot_base64 = ""
+        if page_url != "about:blank" and page_url.startswith("http"):
+            screenshot_base64 = await self._take_screenshot(page)
+        
         # 构建思考 prompt
-        prompt = f"""你是一个网页自动化 Agent。请观察当前页面状态，思考下一步该做什么。
-
-用户任务: {instruction}
+        text_content = f"""用户任务: {instruction}
 
 当前页面状态:
 - URL: {page_url}
 - 标题: {page_title}
-- 页面摘要: {page_snippet[:300]}
+- 页面摘要: {page_snippet[:300] if page_snippet else '空白页'}
 
 可交互元素 (共 {len(elements)} 个):
-{json.dumps(elements, ensure_ascii=False, indent=2)}
+{json.dumps(elements, ensure_ascii=False, indent=2) if elements else '无'}
 
-请思考并返回 JSON:
+请观察截图，分析当前页面状态，返回下一步操作的 JSON。
 
-{{
-    "thinking": "当前页面是什么？用户任务完成了吗？下一步应该做什么？",
-    "action": "操作类型",
-    "params": {{}},
-    "description": "操作描述"
-}}
+【必须】返回格式（仅 JSON，不要其他文字）:
+{{"thinking": "思考内容", "action": "操作", "params": {{}}, "description": "描述"}}
 
-支持的 action:
-1. "goto" - 导航到 URL: {{"url": "https://..."}}
-2. "input" - 输入文本: {{"selector": "nth(索引) 或 CSS选择器", "value": "输入内容"}}
-3. "search" - 在输入框输入并搜索（自动按回车）: {{"selector": "nth(索引)", "value": "搜索内容"}}
-4. "click" - 点击元素: {{"selector": "nth(索引) 或 CSS选择器"}}
-5. "scroll" - 滚动页面: {{}}
-6. "wait" - 等待: {{"seconds": 2}}
-7. "extract" - 提取数据并结束: {{"fields": ["字段1", "字段2"]}}
-8. "done" - 任务已完成，返回结果: {{"result": {{}}}}
+action 可选值:
+- goto: {{"action": "goto", "params": {{"url": "https://..."}}}}
+- search: {{"action": "search", "params": {{"selector": "nth(0)", "value": "搜索内容"}}}}
+- click: {{"action": "click", "params": {{"text": "链接文本"}}}}
+- extract: {{"action": "extract", "params": {{}}}}
+- done: {{"action": "done", "params": {{"result": {{}}}}}}
 
-重要提示:
-- 如果页面 URL 是 about:blank，需要先 goto
-- 如果需要在搜索框输入并搜索，使用 search 操作（会自动按回车）
-- 如果使用 input 操作，之后需要 click 搜索按钮或再执行 click 操作
-- 如果已经在结果页面，可以 extract 提取数据
-- 元素索引范围: 0 到 {len(elements) - 1}
-
-只返回 JSON，不要其他内容。"""
+当前应该做什么？返回 JSON："""
 
         try:
-            response = await llm.ainvoke(prompt)
+            # 根据是否有截图选择消息类型
+            if screenshot_base64:
+                # 使用多模态消息（图片+文本）
+                message = HumanMessage(content=[
+                    {"type": "text", "text": text_content},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{screenshot_base64}"}}
+                ])
+            else:
+                # 纯文本消息
+                message = HumanMessage(content=text_content)
+            
+            response = await llm.ainvoke([message])
             usage["prompt_tokens"] += response.usage_metadata.get("input_tokens", 0)
             usage["completion_tokens"] += response.usage_metadata.get("output_tokens", 0)
             
             decision = self._parse_json(response.content)
+            
+            # 记录 AI 原始返回（调试用）
+            logger.info(f"AI返回: {response.content[:200]}")
             
             thinking = decision.get("thinking", "")
             action = decision.get("action", "")
             params = decision.get("params", {})
             description = decision.get("description", "")
             
+            # 如果解析失败，记录原始响应
+            if not action and "raw_response" in decision:
+                logger.warning(f"JSON解析失败，原始响应: {decision['raw_response'][:200]}")
+                self.logs.append(log_step(
+                    step=len(self.logs) + 1, 
+                    action="警告", 
+                    description=f"AI返回格式错误，重试..."
+                ))
+                # 重试一次
+                return await self._think_and_act(page, instruction, usage, step_count + 1, allow_manual_login)
+            
             # 记录思考过程
             self.logs.append(log_step(
                 step=len(self.logs) + 1, 
                 action="思考", 
-                description=thinking[:100]
+                description=thinking[:100] if thinking else description[:100]
             ))
             
             # 执行动作
@@ -286,10 +380,26 @@ class AgentExecutor:
             
             elif action == "click":
                 selector = params.get("selector", "")
-                if selector:
+                click_text = params.get("text", "")  # 新增：点击包含特定文本的元素
+                if selector or click_text:
                     self.logs.append(log_step(step=len(self.logs) + 1, action="点击", description=description))
-                    await self._do_click(page, selector)
+                    # 记录点击前的 URL
+                    url_before = page.url
+                    await self._do_click(page, selector, click_text)
+                    # 等待页面加载完成或 URL 变化
+                    try:
+                        # 等待 URL 变化或网络空闲
+                        for _ in range(10):
+                            await asyncio.sleep(1)
+                            if page.url != url_before:
+                                logger.info(f"页面跳转: {url_before} -> {page.url}")
+                                break
+                        await page.wait_for_load_state("networkidle", timeout=15000)
+                    except:
+                        pass
                     await asyncio.sleep(self.wait_after_navigate)
+                    # 记录点击后的 URL
+                    logger.info(f"点击后 URL: {page.url}")
             
             elif action == "scroll":
                 self.logs.append(log_step(step=len(self.logs) + 1, action="滚动", description="向下滚动页面"))
@@ -355,24 +465,54 @@ class AgentExecutor:
             # 降级：键盘输入
             await page.keyboard.type(value, delay=self.keyboard_delay)
     
-    async def _do_click(self, page, selector: str):
-        """执行点击操作"""
+    async def _do_click(self, page, selector: str, click_text: str = ""):
+        """执行点击操作
+        
+        Args:
+            page: 页面对象
+            selector: 选择器（nth(索引) 或 CSS）
+            click_text: 要点击的元素包含的文本（优先使用）
+        """
         try:
+            # 优先使用文本匹配
+            if click_text:
+                # 尝试多种元素类型
+                for element_type in ["button:visible", "a:visible", "[role='button']:visible", "div:visible", "span:visible", "input:visible"]:
+                    try:
+                        locator = page.locator(element_type).filter(has_text=click_text).first
+                        await locator.click(timeout=3000)
+                        logger.info(f"点击包含文本 '{click_text}' 的 {element_type} 成功")
+                        await asyncio.sleep(self.wait_after_click)
+                        return
+                    except Exception as e:
+                        continue
+                
+                # 尝试点击任意包含文本的可点击元素
+                try:
+                    locator = page.locator("*:visible").filter(has=page.locator(f"text={click_text}")).first
+                    await locator.click(timeout=3000)
+                    logger.info(f"点击包含文本 '{click_text}' 的元素成功")
+                    await asyncio.sleep(self.wait_after_click)
+                    return
+                except Exception as e:
+                    logger.warning(f"点击文本 '{click_text}' 失败: {str(e)}")
+            
+            # 使用选择器
             if selector.startswith("nth("):
                 idx = int(selector.replace("nth(", "").replace(")", ""))
-                elements = await self._get_interactive_elements(page)
-                if idx < len(elements):
-                    el = elements[idx]
-                    if el.get('id'):
-                        await page.locator(f"#{el['id']}").click()
-                    elif el.get('tag') == 'a' or el.get('tag') == 'button':
-                        await page.locator(f"{el['tag']}:visible").nth(idx).click()
-                    else:
-                        await page.keyboard.press("Enter")
+                # 获取所有可见可点击元素
+                clickable = await page.locator("button:visible, a:visible, [role='button']:visible").all()
+                if idx < len(clickable):
+                    await clickable[idx].click()
                 else:
                     await page.keyboard.press("Enter")
+            elif selector:
+                try:
+                    await page.locator(selector).first.click(timeout=5000)
+                except:
+                    await page.locator("button:visible, a:visible").first.click()
             else:
-                await page.locator(selector).first.click()
+                await page.keyboard.press("Enter")
             
             await asyncio.sleep(self.wait_after_click)
             
@@ -381,55 +521,43 @@ class AgentExecutor:
             await page.keyboard.press("Enter")
     
     async def _get_interactive_elements(self, page) -> List[Dict]:
-        """获取页面可交互元素"""
+        """获取页面可交互元素 - 收集所有可见元素，让 AI 自己判断"""
         try:
             js_code = """
                 () => {
                     const results = [];
-                    document.querySelectorAll('input:not([type="hidden"]), button, a, textarea, select, [role="button"], [onclick]').forEach((el) => {
+                    
+                    // 收集所有可交互元素
+                    document.querySelectorAll('input:not([type="hidden"]), textarea, button, a, [role="button"], select').forEach((el) => {
                         const rect = el.getBoundingClientRect();
                         const style = window.getComputedStyle(el);
                         
-                        if (rect.width > 0 && 
-                            rect.height > 0 && 
-                            rect.top >= 0 &&
-                            style.display !== 'none' &&
-                            style.visibility !== 'hidden' &&
-                            !el.disabled) {
+                        if (rect.width > 0 && rect.height > 0 && rect.top >= 0 &&
+                            style.display !== 'none' && style.visibility !== 'hidden' && !el.disabled) {
                             
                             const tag = el.tagName.toLowerCase();
                             const type = el.type || '';
-                            const text = (el.innerText || el.value || el.placeholder || el.name || el.id || '').substring(0, %d).trim();
-                            const placeholder = (el.placeholder || '').substring(0, %d);
+                            const text = (el.innerText || el.value || el.placeholder || '').substring(0, 30).trim();
+                            const href = (el.href || '').substring(0, 50);
+                            const placeholder = (el.placeholder || '').substring(0, 30);
                             
                             results.push({
                                 tag: tag,
                                 type: type,
-                                text: text,
-                                placeholder: placeholder,
-                                name: el.name || '',
-                                id: el.id || ''
+                                text: text || placeholder || href,
+                                href: href,
+                                placeholder: placeholder
                             });
                         }
                     });
                     
-                    // 排序：输入框优先
-                    results.sort((a, b) => {
-                        const aIsInput = ['input', 'textarea'].includes(a.tag);
-                        const bIsInput = ['input', 'textarea'].includes(b.tag);
-                        if (aIsInput && !bIsInput) return -1;
-                        if (!aIsInput && bIsInput) return 1;
-                        return 0;
-                    });
-                    
-                    return results;
+                    return results.slice(0, %d);
                 }
-            """ % (self.element_text_length, self.element_text_length)
+            """ % self.max_elements
             
             elements = await page.evaluate(js_code)
             
             if elements:
-                elements = elements[:self.max_elements]
                 for i, el in enumerate(elements):
                     el['idx'] = i
             
@@ -475,21 +603,51 @@ class AgentExecutor:
                 "snippet": (await page.evaluate("() => document.body.innerText"))[:self.snippet_length]
             }
     
+    async def _take_screenshot(self, page) -> str:
+        """截取页面截图并返回 base64 编码"""
+        try:
+            screenshot_bytes = await page.screenshot(type="png", full_page=False)
+            return base64.b64encode(screenshot_bytes).decode("utf-8")
+        except Exception as e:
+            logger.warning(f"截图失败: {str(e)}")
+            return ""
+    
     def _parse_json(self, text: str) -> Dict:
-        """解析 JSON"""
+        """解析 JSON - 支持多种格式"""
+        # 1. 直接解析
         try:
             return json.loads(text)
         except:
             pass
         
-        # 尝试提取 JSON
-        match = re.search(r'\{[^{}]*\}', text, re.DOTALL)
-        if match:
+        # 2. 移除 markdown 代码块标记
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            # 移除 ```json 或 ```
+            cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+            cleaned = re.sub(r'\s*```$', '', cleaned)
             try:
-                return json.loads(match.group(0))
+                return json.loads(cleaned)
             except:
                 pass
         
+        # 3. 提取第一个完整的 JSON 对象
+        brace_count = 0
+        start_idx = -1
+        for i, char in enumerate(text):
+            if char == '{':
+                if start_idx == -1:
+                    start_idx = i
+                brace_count += 1
+            elif char == '}':
+                brace_count -= 1
+                if brace_count == 0 and start_idx >= 0:
+                    try:
+                        return json.loads(text[start_idx:i+1])
+                    except:
+                        pass
+        
+        # 4. 尝试正则提取
         match = re.search(r'\{.*\}', text, re.DOTALL)
         if match:
             try:
