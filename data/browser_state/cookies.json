@@ -1,0 +1,232 @@
+[
+  {
+    "name": "XFI",
+    "value": "86167510-55e0-11f1-889e-9337e3434ee8",
+    "domain": "wappass.baidu.com",
+    "path": "/static/captcha",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "XFCS",
+    "value": "82DA0075633FC7108B55A1854C5235737F530DDEFAF7AA0D8FA88AE3F02646A4",
+    "domain": "wappass.baidu.com",
+    "path": "/static/captcha",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "XFT",
+    "value": "pnQzvUn+HXYJnsezKmTRXhf6TKfJJD+yAvT2+LWu9l4=",
+    "domain": "wappass.baidu.com",
+    "path": "/static/captcha",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "BAIDUID",
+    "value": "9DD1C475F778F68E1B49C42D5B0C84F1:FG=1",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": 1810991815.296896,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "BAIDUID_BFESS",
+    "value": "9DD1C475F778F68E1B49C42D5B0C84F1:FG=1",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": 1810991815.297066,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "HMACCOUNT",
+    "value": "B696F9F19D88A562",
+    "domain": ".hm.baidu.com",
+    "path": "/",
+    "expires": 1814015815.662861,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "HMACCOUNT_BFESS",
+    "value": "B696F9F19D88A562",
+    "domain": ".hm.baidu.com",
+    "path": "/",
+    "expires": 1814015815.663049,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ab_jid",
+    "value": "46515ffd5a79a6d890fc4f06e7a25412e1d8",
+    "domain": ".miao.baidu.com",
+    "path": "/",
+    "expires": 1814015816.282473,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ab_jid_BFESS",
+    "value": "46515ffd5a79a6d890fc4f06e7a25412e1d8",
+    "domain": ".miao.baidu.com",
+    "path": "/",
+    "expires": 1814015816.282603,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ab177945480",
+    "value": "e1f087eb327cf432b000ebc09bb1206d17794558157c3",
+    "domain": "aiqicha.baidu.com",
+    "path": "/",
+    "expires": 1779459415.714046,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "Hm_lvt_ad52b306e1ae4557f5d3534cce8f8bbf",
+    "value": "1779455816",
+    "domain": ".aiqicha.baidu.com",
+    "path": "/",
+    "expires": 1810991815,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "Hm_lpvt_ad52b306e1ae4557f5d3534cce8f8bbf",
+    "value": "1779455816",
+    "domain": ".aiqicha.baidu.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "HMACCOUNT",
+    "value": "B696F9F19D88A562",
+    "domain": ".aiqicha.baidu.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "ab_bid",
+    "value": "515ffd5a79a6d890fc4f06e7a25412e1d91e",
+    "domain": ".miao.baidu.com",
+    "path": "/",
+    "expires": 1814015816.28255,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "ab_sr",
+    "value": "1.0.1_ZDI1YjZmZDA5ZDIyNTc1NDM5YjlmYmU5NzAxNGZhZTVjMjk2OTQyYmM3MzFjMWJkZjdiM2ZjMDM1NWYzOGM0ZDgwZTI0YTM2NjY3ODBiYzY4MzQ1ZTYwMjFlYjY2NTQxZjQ1YmY1M2NlZmUwMzBlZGZkOTQyMmU4N2RhZWExZDAxMThkMjlhNGJjYjJlMGI5NzY2M2E4MDZlMmJmMjgyZg==",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": 1779463016.282569,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_s53_d91_",
+    "value": "7fd3b9caf9b81a35a9ffd0648737e651e59ad9fa1a99be9fbc79b5d60e2ca64420de606272963b9bed4eb9c45ca5091cb74ecb2158a93786bb65501421406e1aee76ae83959aa04ed1714add171f78e1618412d7c840d1db94b7d5fc0ab40b92aa9a6185fb3514acff16c52aff6099204a82fc293a118166f5f915b811505ac16130c4178fde05e60d592d28beb93ad62a8751ec4519a172d64fb4ef321bf1257ac20a9691875951540217e31530bfd566db7953743b9416c08e7d8e3329b548dfddc934deb5cbe17883dc702d2dfdc7",
+    "domain": "aiqicha.baidu.com",
+    "path": "/",
+    "expires": 1782047816,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_j47_ka8_",
+    "value": "57",
+    "domain": "aiqicha.baidu.com",
+    "path": "/",
+    "expires": 1782047816,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "_y18_s21_",
+    "value": "c1182255",
+    "domain": "aiqicha.baidu.com",
+    "path": "/",
+    "expires": 1782047816,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "in_source",
+    "value": "",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": 1779484616,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "log_first_time",
+    "value": "1779455816475",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "log_last_time",
+    "value": "1779455823209",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "RT",
+    "value": "\"z=1&dm=baidu.com&si=a3e9454c-1472-4058-a65e-b4307775ab5f&ss=mpgy1qd2&sl=1&tt=1jc&bcn=https%3A%2F%2Ffclog.baidu.com%2Flog%2Fweirwood%3Ftype%3Dperf&ld=2be&ul=69g&hd=6d7\"",
+    "domain": ".baidu.com",
+    "path": "/",
+    "expires": 1780060623,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "XFS",
+    "value": "pnQzvUn%2BHXYJnsezKmTRXhf6TKfJJD%2ByAvT2%2BLWu9l4%3D",
+    "domain": "xlab.baidu.com",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]
