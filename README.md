@@ -1,6 +1,6 @@
 # AgentWeb v1.0 后端
 
-AI 网页自动化后端服务 - 基于 ReAct 模式的智能 Agent
+AI 网页自动化后端服务 - 基于 ReAct 模式的智能 Agent 
 
 **配套前端项目**: [agentweb-frontend](https://github.com/Yz-001/agentweb-frontend)
 
