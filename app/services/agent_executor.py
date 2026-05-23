@@ -451,7 +451,7 @@ class WaitTool(BaseTool):
 class ExtractTool(BaseTool):
     """从页面提取数据"""
     
-    def __init__(self, extract_text_length: int = 1500):
+    def __init__(self, extract_text_length: int = 3000):
         self.extract_text_length = extract_text_length
     
     @property
@@ -460,7 +460,7 @@ class ExtractTool(BaseTool):
     
     @property
     def description(self) -> str:
-        return "从当前页面提取结构化数据。用于获取页面内容、商品信息、搜索结果等。"
+        return "从当前页面提取结构化数据。用于获取页面内容、商品信息、搜索结果、轨迹列表等。支持提取特定 class 元素的结构化数据。"
     
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -471,16 +471,54 @@ class ExtractTool(BaseTool):
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "要提取的字段名称列表，例如 ['title', 'price', 'description']"
+                },
+                "selector": {
+                    "type": "string",
+                    "description": "可选：要提取的特定元素选择器，例如 '.el-steps' 或 '.track-list-title'，用于提取结构化列表数据"
                 }
             },
             "required": []
         }
     
-    async def execute(self, page, fields: List[str] = None, **kwargs) -> ToolResult:
+    async def execute(self, page, fields: List[str] = None, selector: str = "", **kwargs) -> ToolResult:
         try:
-            page_text = await page.evaluate("() => document.body.innerText")
             page_url = page.url
             page_title = await page.title()
+            
+            # 如果指定了选择器，提取结构化列表数据
+            if selector:
+                structured_data = await page.evaluate("""
+                    (selector) => {
+                        const elements = document.querySelectorAll(selector);
+                        const results = [];
+                        elements.forEach(el => {
+                            results.push({
+                                text: el.innerText.trim(),
+                                html: el.outerHTML.substring(0, 200)
+                            });
+                        });
+                        return results;
+                    }
+                """, selector)
+                
+                page_text = await page.evaluate("() => document.body.innerText")
+                
+                return ToolResult(
+                    success=True,
+                    output=f"成功提取 {len(structured_data)} 个 '{selector}' 元素，URL: {page_url}",
+                    data={
+                        "url": page_url,
+                        "title": page_title,
+                        "content": page_text[:self.extract_text_length],
+                        "structured_data": structured_data,
+                        "count": len(structured_data),
+                        "fields": fields,
+                        "selector": selector
+                    }
+                )
+            
+            # 默认提取整个页面文本
+            page_text = await page.evaluate("() => document.body.innerText")
             
             return ToolResult(
                 success=True,
