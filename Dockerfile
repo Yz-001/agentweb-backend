@@ -40,9 +40,8 @@ COPY requirements.txt .
 # 安装 Python 依赖
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 安装 Playwright 浏览器
-RUN playwright install chromium
-RUN playwright install-deps chromium
+# 安装 Patchright 浏览器
+RUN patchright install chromium
 
 # 复制应用代码
 COPY . .

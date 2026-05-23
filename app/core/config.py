@@ -25,7 +25,8 @@ class Settings(BaseSettings):
     DEFAULT_TIMEOUT_SECONDS: int = 300
     DEFAULT_HEADLESS: bool = True
     
-    # CORS 配置
+    # CORS 配置（生产环境建议限制为特定域名）
+    # 示例: CORS_ORIGINS='["http://localhost:3000","https://your-domain.com"]'
     CORS_ORIGINS: list = ["*"]
     
     # 未来扩展：数据库配置
