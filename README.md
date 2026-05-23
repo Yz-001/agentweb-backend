@@ -50,6 +50,7 @@ python -m uvicorn app.main:app --reload
 
 启动服务后：
 - **Web 界面**: `http://localhost:8000` - 直接在浏览器中操作
+- **简单测试**: `http://localhost:8000/test` - 快速测试页面
 - **API 文档**: `http://localhost:8000/docs` - Swagger UI
 - **API 文档**: `http://localhost:8000/redoc` - ReDoc
 
