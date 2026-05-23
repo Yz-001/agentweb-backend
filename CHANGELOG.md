@@ -128,5 +128,5 @@
 
 感谢以下开源项目：
 - [LangChain](https://github.com/langchain-ai/langchain) - AI 应用开发框架
-- [Playwright](https://github.com/microsoft/playwright) - 浏览器自动化
+- [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python) - 浏览器自动化（Playwright 反检测版本）
 - [FastAPI](https://github.com/tiangolo/fastapi) - 高性能 Web 框架
