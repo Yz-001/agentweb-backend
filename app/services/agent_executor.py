@@ -494,6 +494,7 @@ class AgentExecutor:
     """Agent 执行器 - 采用 ReAct (Reasoning + Acting) 模式
     
     支持 OpenAI Function Calling 提高可靠性
+    支持实时日志回调
     """
     
     SYSTEM_PROMPT = """你是网页操作Agent。工具: goto(url), input(selector,value,press_enter), click(selector|text), scroll(dir), wait(sec), extract(), done(result,summary)。
@@ -531,7 +532,8 @@ class AgentExecutor:
         snippet_length: int = 500,
         element_text_length: int = 30,
         max_history_messages: int = 30,
-        use_function_calling: bool = True
+        use_function_calling: bool = True,
+        log_callback = None  # 实时日志回调函数
     ):
         self.api_key = api_key
         self.base_url = base_url
@@ -558,6 +560,7 @@ class AgentExecutor:
         self.element_text_length = element_text_length
         self.max_history_messages = max_history_messages
         self.use_function_calling = use_function_calling
+        self.log_callback = log_callback  # 保存回调函数
         
         # 初始化工具集
         self.tools: Dict[str, BaseTool] = {}
@@ -641,6 +644,7 @@ class AgentExecutor:
         
         try:
             self.logs.append(log_step(step=1, action="初始化", description=f"启动浏览器，模型: {self.model_name}"))
+            await self._emit_log({"step": 1, "action": "初始化", "description": f"启动浏览器，模型: {self.model_name}"})
             
             # 确保状态目录存在
             STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -660,6 +664,7 @@ class AgentExecutor:
                     cookies = json.loads(state_file.read_text())
                     await context.add_cookies(cookies)
                     self.logs.append(log_step(step=len(self.logs) + 1, action="加载状态", description="加载已保存的登录状态"))
+                    await self._emit_log({"step": len(self.logs), "action": "加载状态", "description": "加载已保存的登录状态"})
                     logger.info("loaded_saved_cookies")
                 except Exception as e:
                     logger.warning(f"加载状态失败: {str(e)}")
@@ -675,6 +680,7 @@ class AgentExecutor:
             page.on("dialog", handle_dialog)
             
             result_data = {}
+            done_event = asyncio.Event()  # 任务完成信号
             
             try:
                 async with asyncio.timeout(timeout_seconds):
@@ -682,6 +688,8 @@ class AgentExecutor:
                     result_data = await self._react_loop(page, instruction, usage, allow_manual_login=allow_manual_login)
                     
                     self.logs.append(log_step(step=len(self.logs) + 1, action="完成", description="任务执行完成"))
+                    await self._emit_log({"step": len(self.logs), "action": "完成", "description": "任务执行完成", "done": True})
+                    done_event.set()
                     
             except asyncio.TimeoutError:
                 self.logs.append(log_step(step=len(self.logs) + 1, action="超时", description=f"任务超过 {timeout_seconds} 秒"))
@@ -789,15 +797,18 @@ class AgentExecutor:
             # 构建状态消息（包含任务进度）
             state_content = self._build_state_message(page_state, task_state, step_count)
             
-            # 构建消息列表（包含历史）
-            messages = self.message_history + [HumanMessage(content=state_content)]
+            # 构建消息列表（历史 + 当前状态）
+            # 注意：不把 state_content 加入历史，只在当前请求中使用
+            messages = self.message_history.copy()
             
-            # 如果有截图，使用多模态消息
+            # 如果有截图，使用多模态消息（保留文本信息）
             if page_state['screenshot']:
-                messages[-1] = HumanMessage(content=[
+                messages.append(HumanMessage(content=[
                     {"type": "text", "text": state_content},
                     {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{page_state['screenshot']}"}}
-                ])
+                ]))
+            else:
+                messages.append(HumanMessage(content=state_content))
             
             try:
                 # ========== 优先使用 Function Calling ==========
@@ -859,11 +870,18 @@ class AgentExecutor:
                 thought = decision.get("thought", decision.get("thinking", ""))
                 
                 # 记录思考过程
-                self.logs.append(log_step(
+                log_entry = log_step(
                     step=len(self.logs) + 1,
                     action="思考",
                     description=thought[:100] if thought else f"执行 {action}"
-                ))
+                )
+                self.logs.append(log_entry)
+                await self._emit_log({
+                    "step": log_entry.step,
+                    "action": log_entry.action,
+                    "description": log_entry.description,
+                    "timestamp": log_entry.timestamp.isoformat() if hasattr(log_entry.timestamp, 'isoformat') else None
+                })
                 
                 # 更新任务状态：记录即将执行的动作
                 if action in ["goto", "click", "input"]:
@@ -884,11 +902,18 @@ class AgentExecutor:
                 tool_result = await tool.execute(page, **params)
                 
                 # 记录执行结果
-                self.logs.append(log_step(
+                log_entry = log_step(
                     step=len(self.logs) + 1,
                     action=f"执行 {action}",
                     description=tool_result.output[:100] if tool_result.output else tool_result.error[:100]
-                ))
+                )
+                self.logs.append(log_entry)
+                await self._emit_log({
+                    "step": log_entry.step,
+                    "action": log_entry.action,
+                    "description": log_entry.description,
+                    "timestamp": log_entry.timestamp.isoformat() if hasattr(log_entry.timestamp, 'isoformat') else None
+                })
                 
                 # ========== 4. Observation - 观察结果 ==========
                 if tool_result.success:
@@ -911,15 +936,34 @@ class AgentExecutor:
                 # 检查是否任务完成
                 if action == "done" or tool_result.data.get("done"):
                     final_result = tool_result.data.get("result", {})
+                    # 发送完成日志
+                    await self._emit_log({
+                        "step": len(self.logs) + 1,
+                        "action": "完成",
+                        "description": tool_result.data.get("summary", "任务完成"),
+                        "done": True,
+                        "result": final_result
+                    })
                     break  # 任务完成，不添加额外消息
                 
                 # 如果是 extract，保存结果但继续执行
                 if action == "extract":
                     final_result = tool_result.data
                 
-                # 添加观察结果到历史（紧凑格式）
+                # 添加观察结果到历史（包含关键执行信息）
                 obs_summary = observation[:100]
-                self.message_history.append(HumanMessage(content=f"结果: {obs_summary}"))
+                
+                # 如果执行成功且有意义的数据，保存关键信息
+                if tool_result.success and tool_result.data:
+                    key_info = ""
+                    if "url" in tool_result.data:
+                        key_info += f"URL: {tool_result.data['url'][:60]} "
+                    if "title" in tool_result.data:
+                        key_info += f"标题: {tool_result.data['title'][:30]}"
+                    self.message_history.append(HumanMessage(content=f"✓ {action}: {key_info or obs_summary}"))
+                else:
+                    status = "✓" if tool_result.success else "✗"
+                    self.message_history.append(HumanMessage(content=f"{status} {action}: {obs_summary}"))
                 
             except Exception as e:
                 consecutive_errors += 1
@@ -946,6 +990,14 @@ class AgentExecutor:
         
         usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
         return final_result
+    
+    async def _emit_log(self, log_data: Dict):
+        """发送日志到回调函数（用于实时推送）"""
+        if self.log_callback:
+            try:
+                await self.log_callback(log_data)
+            except Exception as e:
+                logger.warning(f"日志回调失败: {str(e)}")
     
     async def _invoke_with_function_calling(self, llm, messages: List, usage: Dict) -> tuple:
         """使用 OpenAI Function Calling 调用 LLM
@@ -981,9 +1033,19 @@ class AgentExecutor:
             
             # 没有工具调用，尝试解析文本
             logger.info(f"AI返回: {response.content[:300]}")
-            decision = self._parse_json(response.content)
+            
+            # 尝试解析紧凑格式: action|thought|params_json
+            decision = self._parse_compact_format(response.content)
+            if not decision:
+                decision = self._parse_json(response.content)
+            
             action = decision.get("action", "")
             params = decision.get("params", {})
+            
+            # 如果解析到有效的 action，记录成功
+            if action:
+                logger.info(f"解析成功: action={action}, params={params}")
+            
             return decision, action, params
             
         except Exception as e:
@@ -1003,9 +1065,17 @@ class AgentExecutor:
         
         logger.info(f"AI返回: {response.content[:300]}")
         
-        decision = self._parse_json(response.content)
+        # 尝试解析紧凑格式: action|thought|params_json
+        decision = self._parse_compact_format(response.content)
+        if not decision:
+            decision = self._parse_json(response.content)
+        
         action = decision.get("action", "")
         params = decision.get("params", {})
+        
+        # 如果解析到有效的 action，记录成功
+        if action:
+            logger.info(f"解析成功: action={action}, params={params}")
         
         return decision, action, params
     
@@ -1307,3 +1377,70 @@ class AgentExecutor:
         
         logger.warning(f"无法解析为 JSON，原始响应: {text[:200]}")
         return {"raw_response": text}
+    
+    def _parse_compact_format(self, text: str) -> Dict:
+        """解析紧凑格式: action|thought|params_json
+        
+        示例: done|任务完成|{"result":{}, "summary":"完成"}
+        
+        注意: thought 中可能包含 | 字符，所以需要从后往前解析
+        """
+        # 检查是否是紧凑格式（至少有一个竖线分隔）
+        if '|' not in text:
+            return None
+        
+        parts = text.split('|')
+        if len(parts) < 2:
+            return None
+        
+        action = parts[0].strip()
+        
+        # 验证 action 是否是有效工具
+        valid_actions = list(self.tools.keys())
+        if action not in valid_actions:
+            return None
+        
+        # 解析 params（从后往前找 JSON 对象）
+        params = {}
+        thought_parts = []
+        
+        # 从最后一个部分开始，尝试解析 JSON
+        for i in range(len(parts) - 1, 0, -1):
+            candidate = parts[i].strip()
+            
+            # 尝试解析为 JSON
+            if candidate.startswith('{'):
+                try:
+                    params = json.loads(candidate)
+                    # JSON 解析成功，前面的部分都是 thought
+                    thought_parts = parts[1:i]
+                    break
+                except json.JSONDecodeError:
+                    # 不是有效 JSON，加入 thought
+                    thought_parts.insert(0, candidate)
+            else:
+                # 不是 JSON 开头，加入 thought
+                thought_parts.insert(0, candidate)
+        
+        # 如果没有找到 JSON，所有中间部分都是 thought
+        if not thought_parts and len(parts) >= 2:
+            thought_parts = parts[1:]
+        
+        # 如果仍然没有 params，尝试在整个文本中找 JSON
+        if not params:
+            json_match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', text, re.DOTALL)
+            if json_match:
+                try:
+                    params = json.loads(json_match.group(0))
+                except:
+                    params = {}
+        
+        thought = '|'.join(thought_parts).strip() if thought_parts else ""
+        
+        logger.info(f"紧凑格式解析成功: action={action}, thought={thought[:50]}")
+        
+        return {
+            "thought": thought,
+            "action": action,
+            "params": params
+        }

@@ -650,7 +650,7 @@
             }
         }
         
-        // 执行任务
+        // 执行任务 - 使用 SSE 实时日志
         async function runTask() {
             const instruction = document.getElementById('instruction').value.trim();
             if (!instruction) {
@@ -676,13 +676,14 @@
             
             // 清空旧结果
             logEntries = [];
-            document.getElementById('logPanel').innerHTML = '<div class="log-empty">正在初始化浏览器...</div>';
+            document.getElementById('logPanel').innerHTML = '<div class="log-empty">正在连接...</div>';
             document.getElementById('resultPanel').innerHTML = '<div class="result-empty">等待结果...</div>';
             document.getElementById('logCount').textContent = '0 条';
             document.getElementById('execTime').textContent = '-';
             
+            // 使用 fetch + SSE 流式读取
             try {
-                const response = await fetch('/api/v1/run', {
+                const response = await fetch('/api/v1/run/stream', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -696,36 +697,77 @@
                     })
                 });
                 
-                const data = await response.json();
-                
-                // 显示日志
-                if (data.logs && data.logs.length > 0) {
-                    logEntries = data.logs;
-                    updateLogPanel();
-                } else {
-                    document.getElementById('logPanel').innerHTML = '<div class="log-empty">无日志记录</div>';
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.detail?.error || '请求失败');
                 }
                 
-                // 显示结果
-                if (data.success) {
-                    const resultHtml = `
-                        <div class="result-json">${syntaxHighlight(JSON.stringify(data.result, null, 2))}</div>
-                        <div class="result-meta">
-                            <span>⏱️ 耗时: ${data.execution_time_ms}ms</span>
-                            <span>📊 Tokens: ${data.usage?.total_tokens || 0}</span>
-                        </div>
-                    `;
-                    document.getElementById('resultPanel').innerHTML = resultHtml;
-                    document.getElementById('execTime').textContent = `${data.execution_time_ms}ms`;
-                } else {
-                    document.getElementById('resultPanel').innerHTML = `
-                        <div class="result-json" style="color: #d32f2f;">
+                // 读取 SSE 流
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    
+                    buffer += decoder.decode(value, { stream: true });
+                    
+                    // 解析 SSE 事件
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop() || '';  // 保留不完整的行
+                    
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            try {
+                                const data = JSON.parse(line.slice(6));
+                                
+                                // 处理日志数据
+                                if (data.step && data.action && data.description) {
+                                    logEntries.push({
+                                        step: data.step,
+                                        action: data.action,
+                                        description: data.description,
+                                        timestamp: data.timestamp || new Date().toISOString()
+                                    });
+                                    updateLogPanel();
+                                }
+                                
+                                // 任务完成
+                                if (data.done) {
+                                    if (data.success) {
+                                        const resultHtml = `
+                                            <div class="result-json">${syntaxHighlight(JSON.stringify(data.result, null, 2))}</div>
+                                            <div class="result-meta">
+                                                <span>⏱️ 耗时: ${data.execution_time_ms}ms</span>
+                                                <span>📊 Tokens: ${data.usage?.total_tokens || 0}</span>
+                                            </div>
+                                        `;
+                                        document.getElementById('resultPanel').innerHTML = resultHtml;
+                                        document.getElementById('execTime').textContent = `${data.execution_time_ms}ms`;
+                                    } else {
+                                        document.getElementById('resultPanel').innerHTML = `
+                                            <div class="result-json" style="color: #d32f2f;">
 ❌ 执行失败
 
-错误类型: ${escapeHtml(data.detail?.error_type || data.error_type || 'Unknown')}
-错误信息: ${escapeHtml(data.detail?.error || data.error || 'Unknown error')}
-                        </div>
-                    `;
+错误类型: ${escapeHtml(data.error_type || 'Unknown')}
+错误信息: ${escapeHtml(data.error || 'Unknown error')}
+                                            </div>
+                                        `;
+                                    }
+                                    
+                                    runBtn.disabled = false;
+                                    runBtn.textContent = '🚀 执行任务';
+                                    statusBadge.className = 'status-badge status-ready';
+                                    statusBadge.textContent = '就绪';
+                                }
+                                
+                            } catch (e) {
+                                console.log('SSE 解析错误:', e, line);
+                            }
+                        }
+                        // 忽略心跳注释行 (以冒号开头)
+                    }
                 }
                 
             } catch (error) {
@@ -736,7 +778,6 @@
 ${escapeHtml(error.message)}
                     </div>
                 `;
-            } finally {
                 runBtn.disabled = false;
                 runBtn.textContent = '🚀 执行任务';
                 statusBadge.className = 'status-badge status-ready';
