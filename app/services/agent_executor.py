@@ -491,11 +491,9 @@ class ExtractTool(BaseTool):
                     (selector) => {
                         const elements = document.querySelectorAll(selector);
                         const results = [];
-                        elements.forEach(el => {
-                            results.push({
-                                text: el.innerText.trim(),
-                                html: el.outerHTML.substring(0, 200)
-                            });
+                        elements.forEach((el, idx) => {
+                            // 去掉换行符，只保留纯文本
+                            results.push(el.innerText.replace(/\\n/g, ' ').trim());
                         });
                         return results;
                     }
@@ -503,17 +501,22 @@ class ExtractTool(BaseTool):
                 
                 page_text = await page.evaluate("() => document.body.innerText")
                 
+                # 构建清晰的列表格式
+                list_summary = f"共提取 {len(structured_data)} 条数据:\n"
+                for i, text in enumerate(structured_data):
+                    list_summary += f"[{i+1}] {text[:100]}\n"
+                
+                # 打印提取的具体数据
+                logger.info(f"ExtractTool 提取结果: selector={selector}, total={len(structured_data)}")
+                for i, text in enumerate(structured_data):
+                    logger.info(f"  [{i+1}] {text}")
+                
                 return ToolResult(
                     success=True,
-                    output=f"成功提取 {len(structured_data)} 个 '{selector}' 元素，URL: {page_url}",
+                    output=f"成功提取 {len(structured_data)} 个 '{selector}' 元素\n{list_summary}",
                     data={
-                        "url": page_url,
-                        "title": page_title,
-                        "content": page_text[:self.extract_text_length],
-                        "structured_data": structured_data,
-                        "count": len(structured_data),
-                        "fields": fields,
-                        "selector": selector
+                        "items": structured_data,
+                        "total": len(structured_data)
                     }
                 )
             
@@ -553,7 +556,7 @@ class DoneTool(BaseTool):
             "properties": {
                 "result": {
                     "type": "object",
-                    "description": "任务执行结果，包含提取的数据或完成状态"
+                    "description": "整理后的结果，必须是 JSON 对象格式，如 {\"items\": [...], \"summary\": \"...\"}"
                 },
                 "summary": {
                     "type": "string",
@@ -582,13 +585,14 @@ class AgentExecutor:
     支持实时日志回调
     """
     
-    SYSTEM_PROMPT = """你是网页操作Agent。工具: goto(url), input(selector,value,press_enter), click(selector|text), scroll(dir), wait(sec), extract(), done(result,summary)。
+    SYSTEM_PROMPT = """你是网页操作Agent。工具: goto(url), input(selector,value,press_enter), click(selector|text), scroll(dir), wait(sec), extract(selector), done(result,summary)。
 
 规则:
 1. 优先用 click(text="按钮文字") 点击
 2. nth(索引)从0开始，先看元素列表确认索引
 3. 失败后换方法，不重复相同操作
-4. 任务完成用 done 返回结果
+4. extract 后整理数据，用 done 返回整理后的结果
+5. done 的 result 必须包含所有数据，不要用"..."省略任何条目
 
 决策格式: {"thought":"状态→差距→动作→预期", "action":"工具名", "params":{}}
 
@@ -1065,7 +1069,11 @@ class AgentExecutor:
                 
                 # 检查是否任务完成
                 if action == "done" or tool_result.data.get("done"):
-                    final_result = tool_result.data.get("result", {})
+                    # 使用 AI 整理的结果（如果 AI 传递了 result）
+                    # 否则使用之前 extract 保存的原始数据
+                    ai_result = tool_result.data.get("result", {})
+                    if ai_result:
+                        final_result = ai_result
                     # 发送完成日志
                     await self._emit_log({
                         "step": len(self.logs) + 1,
@@ -1085,12 +1093,24 @@ class AgentExecutor:
                 
                 # 如果执行成功且有意义的数据，保存关键信息
                 if tool_result.success and tool_result.data:
-                    key_info = ""
-                    if "url" in tool_result.data:
-                        key_info += f"URL: {tool_result.data['url'][:60]} "
-                    if "title" in tool_result.data:
-                        key_info += f"标题: {tool_result.data['title'][:30]}"
-                    self.message_history.append(HumanMessage(content=f"✓ {action}: {key_info or obs_summary}"))
+                    # 如果是 extract，把所有提取的数据传给 AI（不省略）
+                    if action == "extract":
+                        items = tool_result.data.get("items", [])
+                        items_count = len(items)
+                        # 把所有数据都传给 AI，不截断
+                        items_full = ""
+                        for i, text in enumerate(items):
+                            items_full += f"\n  [{i+1}] {text}"
+                        self.message_history.append(HumanMessage(content=f"✓ {action}: 提取到 {items_count} 条数据（完整列表）:{items_full}"))
+                    elif isinstance(tool_result.data, dict):
+                        key_info = ""
+                        if "url" in tool_result.data:
+                            key_info += f"URL: {tool_result.data['url'][:60]} "
+                        if "title" in tool_result.data:
+                            key_info += f"标题: {tool_result.data['title'][:30]}"
+                        self.message_history.append(HumanMessage(content=f"✓ {action}: {key_info or obs_summary}"))
+                    else:
+                        self.message_history.append(HumanMessage(content=f"✓ {action}: {obs_summary}"))
                 else:
                     status = "✓" if tool_result.success else "✗"
                     self.message_history.append(HumanMessage(content=f"{status} {action}: {obs_summary}"))
