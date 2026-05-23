@@ -253,9 +253,42 @@ class ClickTool(BaseTool):
         
         url_before = page.url
         try:
-            # 优先使用文本匹配
+            # 优先使用文本匹配（按元素优先级：真正按钮 > 语义按钮 > 伪按钮 > 表单元素 > 链接 > 其他）
             if text:
-                for element_type in ["button:visible", "a:visible", "[role='button']:visible", "div:visible", "span:visible", "input:visible"]:
+                for element_type in [
+                    # 1. 真正的按钮元素
+                    "button:visible",
+                    # 2. 语义化按钮
+                    "[role='button']:visible",
+                    # 3. 伪按钮 - 常见 class 名称
+                    "div.btn:visible",
+                    "div.button:visible",
+                    "div.search-btn:visible",
+                    "div.submit-btn:visible",
+                    "div.action-btn:visible",
+                    "div.query-btn:visible",
+                    "span.btn:visible",
+                    "span.button:visible",
+                    # 4. 伪按钮 - class 包含关键词
+                    "div[class*='btn']:visible",
+                    "div[class*='button']:visible",
+                    "div[class*='-btn']:visible",
+                    "div[class*='-button']:visible",
+                    "span[class*='btn']:visible",
+                    "span[class*='button']:visible",
+                    "a[class*='btn']:visible",
+                    "a[class*='button']:visible",
+                    # 5. 表单提交按钮
+                    "input[type='submit']:visible",
+                    "input[type='button']:visible",
+                    "input[type='image']:visible",
+                    # 6. 链接（放后面，避免误点）
+                    "a:visible",
+                    # 7. 其他可点击元素
+                    "div:visible",
+                    "span:visible",
+                    "input:visible",
+                ]:
                     try:
                         locator = page.locator(element_type).filter(has_text=text).first
                         if await locator.is_visible(timeout=1000):
