@@ -665,11 +665,41 @@ class AgentExecutor:
             
             # 启动浏览器
             p = await async_playwright().start()
-            browser = await p.chromium.launch(
-                headless=self.headless,
-                args=["--dns-over-https-mode=off", "--disable-async-dns"],
-            )
-            context = await browser.new_context()
+            
+            # 非无头模式下添加窗口显示参数
+            launch_args = [
+                "--dns-over-https-mode=off",
+                "--disable-async-dns",
+            ]
+            if not self.headless:
+                launch_args.append("--start-maximized")
+            
+            # 检查是否有自定义浏览器路径（仅通过环境变量配置，不硬编码）
+            import os
+            custom_browser_path = os.environ.get("BROWSER_PATH", "")
+            
+            launch_options = {
+                "headless": self.headless,
+                "args": launch_args,
+            }
+            
+            # 如果设置了环境变量且路径存在，使用自定义浏览器
+            if custom_browser_path and os.path.exists(custom_browser_path):
+                logger.info(f"使用自定义浏览器路径: {custom_browser_path}")
+                launch_options["executable_path"] = custom_browser_path
+            else:
+                logger.info("使用 Playwright 默认浏览器")
+            
+            browser = await p.chromium.launch(**launch_options)
+            
+            # 非无头模式下创建带视口的上下文
+            if not self.headless:
+                context = await browser.new_context(
+                    viewport={"width": 1920, "height": 1080},
+                    screen={"width": 1920, "height": 1080},
+                )
+            else:
+                context = await browser.new_context()
             
             # 加载已保存的浏览器状态（cookies）
             state_file = STATE_DIR / "cookies.json"
@@ -684,6 +714,14 @@ class AgentExecutor:
                     logger.warning(f"加载状态失败: {str(e)}")
             
             page = await context.new_page()
+            
+            # 非无头模式下，强制将窗口带到前台
+            if not self.headless:
+                try:
+                    await page.bring_to_front()
+                    logger.info("已将浏览器窗口带到前台")
+                except Exception as e:
+                    logger.warning(f"bring_to_front 失败: {str(e)}")
             
             # 设置弹窗自动处理
             async def handle_dialog(dialog):
