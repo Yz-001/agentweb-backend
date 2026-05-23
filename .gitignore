@@ -47,3 +47,6 @@ Thumbs.db
 
 # Playwright
 .playwright/
+
+# Browser state (cookies, etc.)
+data/browser_state/
