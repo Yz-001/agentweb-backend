@@ -290,9 +290,23 @@ class ClickTool(BaseTool):
                     except ValueError:
                         return ToolResult(success=False, output="", error=f"无效的 nth 格式: {selector}")
                     
-                    clickable = await page.locator("button:visible, a:visible, [role='button']:visible").all()
+                    # 获取所有可见且在视口内的可点击元素
+                    all_clickable = await page.locator("button:visible, a:visible, [role='button']:visible, input[type='button']:visible, input[type='submit']:visible").all()
+                    
+                    # 过滤：只保留在视口内的元素
+                    clickable = []
+                    for el in all_clickable:
+                        try:
+                            is_visible = await el.is_visible()
+                            if is_visible:
+                                box = await el.bounding_box()
+                                if box and box['y'] >= 0 and box['y'] <= page.viewport_size['height']:
+                                    clickable.append(el)
+                        except:
+                            continue
+                    
                     if idx < 0 or idx >= len(clickable):
-                        return ToolResult(success=False, output="", error=f"索引 {idx} 超出范围，当前共有 {len(clickable)} 个可点击元素")
+                        return ToolResult(success=False, output="", error=f"索引 {idx} 超出范围，视口内共有 {len(clickable)} 个可点击元素（总元素 {len(all_clickable)} 个，部分在视口外）")
                     await clickable[idx].click()
                     await asyncio.sleep(self.wait_after)
                     return ToolResult(success=True, output=f"点击第 {idx} 个可点击元素成功")
@@ -705,8 +719,15 @@ class AgentExecutor:
                 except Exception as e:
                     logger.warning(f"保存状态失败: {str(e)}")
                 
-                await browser.close()
-                await p.stop()
+                try:
+                    await browser.close()
+                except Exception as e:
+                    logger.warning(f"浏览器关闭失败（可能已关闭）: {str(e)}")
+                
+                try:
+                    await p.stop()
+                except Exception as e:
+                    logger.warning(f"Playwright 停止失败: {str(e)}")
             
             execution_time_ms = int((time.time() - start_time) * 1000)
             
